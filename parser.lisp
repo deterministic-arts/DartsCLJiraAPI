@@ -2,14 +2,36 @@
 (in-package "DARTS.LIB.JIRA-API")
 
 
-(defvar +ignore+
-  (gensym "IGNORE-VALUE"))
+(defvar +ignore+ (gensym "IGNORE-VALUE")
+  "If this value is returned by a parser function, then the
+   key/value pair (or array element) will be ignored by the
+   caller, and not be added to the object currently under
+   construction.")
 
 (defun ignorep (value)
+  "True, if `value' refers to the special `+ignored+' value,
+   and false otherwise."
   (eq value +ignore+))
 
 
-(defgeneric intern-session-object (state key constructor))
+(defgeneric intern-session-object (state key constructor)
+  (:documentation "Tests, whether there is already an object with
+    a given `key' in cache `state'. If so, returns the existing
+    object, otherwise, calls factory to construct a new instance,
+    and adds it to `state'. The parser calls this function after
+    it has successfully parsed a resource. The key is always a
+    cons pair whose car is the name of the class, and whose cdr
+    is a (class-dependend) identifier.    
+
+    This function has only a single default implementation,
+    specializing the `state' argument on type `null'. This method
+    will simply always call the constructor. 
+
+    This function is provided for client applications, which want
+    to perform caching for all (or at least some sensible subset
+    of) the resources being read from the Jira server. This is
+    interesting in particular for resource types like issue-type,
+    priority, etc., but outside of the scope of this API."))
 
 (defmethod intern-session-object ((state null) key constructor)
   (funcall constructor))
@@ -60,6 +82,56 @@
 
 (defun json-array-p (value)
   (and (consp value) (eq :array (car value))))
+
+
+;;; A parser function is a function 
+;;;
+;;;   (lambda (value state path &key nullable default) ...)
+;;;
+;;; which takes
+;;;
+;;; - `value' the value to parse
+;;; - `state' an application supplied state used for caching
+;;; - `path' a list indicating the path to `value' in the graph being parsed
+;;;
+;;; and returns the parsed representation of `value' or (if the
+;;; caller allows it) `+ignore+'.
+;;;
+;;; Accepted values for `nullable' are
+;;;
+;;; - `nil' if the value is required 
+;;; - `:error' if it may be ignored if parsing fails
+;;; - `:null' if it may be ignored if it was explicitly null in the input
+;;; - `t' if the value is always optional
+;;;
+;;; The value of `default' is returned by the parser, if the input
+;;; value was `:null' and `nullable' did allow for this, or if
+;;; a parse error occurred, `nullable' allows skipping the value
+;;; in that situation, and the `skip-offending-value' restart was
+;;; invoked.
+;;;
+;;; Each parser function defined using the macro below provides
+;;; a few default restarts, which are active in case of parser-errors.
+;;; These restarts may be used to recover from errors either from
+;;; the debugger or programmatically by calling the appropriate 
+;;; restart function.
+;;;
+;;; The restart named `skip-offending-value' is active, if the
+;;; caller of the parser function specified, that a null value is
+;;; acceptable in case of errors (i.e., by supplying `nullable'
+;;; as either `t' or `:error'). If it is invoked, the parser
+;;; function will return the `default' value.
+;;;
+;;; The restart `use-value' is always active. It can be used to
+;;; provide a replacement value, which will then be parsed instead
+;;; of the original offending value.
+;;;
+;;; FIXME: the interface should better be
+;;;
+;;;   (lambda (value &key state path nullable default) ...)
+;;;
+;;; which would make the parser functions nicer to use in a stand-
+;;; alone fashion.
 
 
 (defmacro define-json-parser (type-name (value-var state-var path-var) &body body)
@@ -288,7 +360,7 @@
 (define-json-parser issue (object state path)
   (if (not (json-object-p object))
       (parser-error object 'issue-type path)
-      (let ((attrs (attribute-tree)) uri id key)
+      (let ((attrs (attribute-tree)) uri id rkey)
         (flet ((remember (kw value)
                  (unless (ignorep value)
                    (setf attrs (wbtree-update kw value attrs))
@@ -301,7 +373,7 @@
                :do (string-case (key)
                      ("self" (setf uri (parse-json-uri value state new-path)))
                      ("id" (setf id (parse-json-string value state new-path)))
-                     ("key" (setf key (parse-json-string value state new-path)))
+                     ("key" (setf rkey (parse-json-string value state new-path)))
                      ("fields"
                       (cond 
                         ((eq value :null) nil)
@@ -327,7 +399,7 @@
           (make-instance 'issue
                          'uri uri 
                          :id (or id "") 
-                         :key (or key "")
+                         :key (or rkey "")
                          :fields attrs)))))
 
 
@@ -353,9 +425,21 @@
                    
 
 (defun find-issue (key-or-id &key (session *default-session*) 
-                                  (fields "*all,-comment,-attachment")
+                                  (fields "*all,-comment,-attachment,-worklog")
                                   (expand nil) (if-does-not-exist :error)
                                   (default nil) (object-cache nil))
+  "Obtains information about the issue identified by `key-or-id' from
+   the Jira backend referenced by `session'. The value of `fields'
+   determines, which data fields should be included in the result.
+
+   If there is no matching issue available on the server, the result
+   depends on `if-does-not-exist':
+  
+   - `:error' the function will raise a transport-error condition
+   - `:default' the function returns the value of `default' instead
+
+   The `object-cache' value is passed down as the caching state to 
+   the parser functions called to intepret the result."
   (flet ((param (include name value)
            (and include
                 (list (cons name (format nil "~A" value))))))
@@ -376,6 +460,17 @@
 (defun find-user (username &key (session *default-session*)
                                 (if-does-not-exist :error) (default nil)
                                 (object-cache nil))
+  "Obtains information about the user, whose username is `username'
+   from the server being referenced by `session'. 
+
+   If there is no matching user available on the server, the result
+   depends on `if-does-not-exist':
+  
+   - `:error' the function will raise a transport-error condition
+   - `:default' the function returns the value of `default' instead
+
+   The `object-cache' value is passed down as the caching state to 
+   the parser functions called to intepret the result."
   (let ((parameters `(("username" . ,username))))
     (handler-case (with-json-result (body "user" :session session :parameters parameters)
                     (values (parse-json-user body object-cache nil) t))
@@ -390,6 +485,14 @@
                                  (fields "*navigable,summary")
                                  (expand nil) (offset 0) (limit nil)
                                  (object-cache nil))
+  "Returns a list of all issues matching the given `query' string;
+   at most `limit' elements are returned, starting with the element 
+   at the logical offset `offset' in the full result set. The value 
+   of `fields' determines, which data fields should be included in 
+   the result.
+
+   The `object-cache' value is passed down as the caching state to 
+   the parser functions called to intepret the result."
   (flet ((param (include name value)
            (and include
                 (list (cons name (format nil "~A" value))))))
@@ -405,22 +508,21 @@
           (values (cdr result) (car result)))))))
 
 
-(defun list-resolutions (&key (session *default-session*)
-                              (object-cache nil))
+(defun list-resolutions (&key (session *default-session*) (object-cache nil))
   (with-json-result (body "resolution" :session session)
     (parse-json-array-of-resolution body object-cache nil)))
 
-(defun list-states (&key (session *default-session*)
-                         (object-cache nil))
+
+(defun list-states (&key (session *default-session*) (object-cache nil))
   (with-json-result (body "status" :session session)
     (parse-json-array-of-status body object-cache nil)))
 
-(defun list-priorities (&key (session *default-session*)
-                         (object-cache nil))
+
+(defun list-priorities (&key (session *default-session*) (object-cache nil))
   (with-json-result (body "priority" :session session)
     (parse-json-array-of-priority body object-cache nil)))
 
-(defun list-issue-types (&key (session *default-session*)
-                              (object-cache nil))
+
+(defun list-issue-types (&key (session *default-session*) (object-cache nil))
   (with-json-result (body "issuetype" :session session)
     (parse-json-array-of-issue-type body object-cache nil)))
