@@ -71,7 +71,9 @@
    (avatars
      :type list :initarg :avatars
      :reader user-avatars))
-  (:documentation ""))
+  (:documentation "This kind of resource is used to represent user
+    information. Since the fields of this resource are fixed, we
+    can simply provide them as regular slots."))
 
 
 (defmethod print-object ((object user) stream)
@@ -81,17 +83,22 @@
 
 (defclass descriptor (resource)
   ((id
-     :type string :initarg :id
+     :type (or null string) :initarg :id
      :reader descriptor-id)
    (name
-     :type string :initarg :name
+     :type (or null string) :initarg :name
      :reader descriptor-name)
    (description
      :type (or null string) :initarg :description
      :reader descriptor-description)
    (icon-uri
      :type (or null uri) :initarg uri
-     :reader descriptor-icon-uri)))
+     :reader descriptor-icon-uri))
+  (:documentation "Base class for simple descriptor resources,
+    which are used by Jira to represent things like issue types,
+    status codes, priorities, etc. Most of these resource types
+    share the very same structure (only issue-type adds a field,
+    the others don't have)."))
 
 
 (defmethod initialize-instance :after ((object descriptor) &key icon-uri &allow-other-keys)
@@ -106,6 +113,7 @@
     (format stream "~S ~S" 
             (descriptor-id object)
             (descriptor-name object))))
+
 
 
 (defclass priority (descriptor) ())
@@ -124,5 +132,92 @@
    (fields
      :type attribute-tree :initform (attribute-tree) :initarg :fields
      :reader issue-fields))
-  (:documentation ""))
+  (:documentation "Generic issue. Instances of this class represent issues
+    as read from the Jira server. Unlike other resource types, this class
+    keeps the actual data in a generic tree structure, instead of its own
+    slot values."))
 
+
+(defun issue-field (issue key &optional default no-slots-p)
+  "Answers the value associated with the field identified by `key' in
+   issue `issue'. If no matching field is found, answers `default'. As
+   a special case, if no value for field `key' can be obtained from 
+   the issues field tree, the function returns
+
+   - (issue-id issue) if (string= key :id)
+   - (issue-key issue) if (string= key :key)
+
+   unless `no-slots-p' is provided with a value of true, in which case
+   those fields are not defaulted from the issue instance's slots.
+   This feature allows all fields to be accessed in a generic way
+   via this function."
+  (multiple-value-bind (value found?) (wbtree-find key (issue-fields issue))
+    (cond 
+      (found? (values value t))
+      (no-slots-p (values default nil))
+      ((string= key "ID") (values (issue-id issue) :default))
+      ((string= key "KEY") (values (issue-key issue) :default))
+      (t (values default nil)))))
+
+
+(defun map-issue-fields (function issue &optional no-slots-p)
+  "Call `function' for each field present in `issue', passing the
+   field's key as first, and the associated value as second argument.
+   If `no-slots-p' is true, then the special fields `:ID' and `:KEY'
+   are omitted, unless they are part of the field tree of `issue'.
+   This function guarantees, that the fields are visited in ascending
+   order of their names."
+  (if no-slots-p
+      (wbtree-map (lambda (node) 
+                    (funcall function 
+                             (wbtree-node-key node) 
+                             (wbtree-node-value node)))
+                  (issue-fields issue))
+      (let ((below-id t) (below-key t))
+        (wbtree-map (lambda (node)
+                      (let ((key (wbtree-node-key node))
+                            (value (wbtree-node-value node)))
+                        (when below-key
+                          (when below-id
+                            (cond
+                              ((string< key "ID") nil)
+                              ((string= key "ID") (setf below-id nil))
+                              (t (funcall function :id (issue-id issue))
+                                 (setf below-id nil))))
+                          (cond
+                            ((string< key "KEY") nil)
+                            ((string= key "KEY") (setf below-key nil))
+                            (t (funcall function :key (issue-key issue))
+                               (setf below-key nil))))
+                        (funcall function key value)))
+                    (issue-fields issue))
+        (when below-id (funcall function :id (issue-id issue)))
+        (when below-key (funcall function :key (issue-key issue)))))
+    nil)
+    
+
+
+
+
+(defmacro define-reader-aliases (reader &body aliases)
+  (if (null aliases) `',reader
+      `(progn 
+         (declaim (inline ,(car aliases)))
+         (defun ,(car aliases) (object) (,reader object))
+         (define-reader-aliases ,reader ,@(cdr aliases)))))
+
+
+(define-reader-aliases resource-uri
+  user-uri issue-uri priority-uri status-uri resolution-uri issue-type-uri)
+
+(define-reader-aliases descriptor-id 
+  priority-id status-id resolution-id issue-type-id)
+
+(define-reader-aliases descriptor-name
+  priority-name status-name resolution-name issue-type-name)
+
+(define-reader-aliases descriptor-description
+  priority-description status-description resolution-description issue-type-description)
+
+(define-reader-aliases descriptor-icon-uri
+  priority-icon-uri status-icon-uri resolution-icon-uri issue-type-icon-uri)

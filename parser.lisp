@@ -325,7 +325,9 @@
                      (t nil)))))
         (interning state (cons 'issue id)
           (make-instance 'issue
-                         'uri uri :id id :key key
+                         'uri uri 
+                         :id (or id "") 
+                         :key (or key "")
                          :fields attrs)))))
 
 
