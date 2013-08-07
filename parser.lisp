@@ -185,23 +185,71 @@
 
 
 (defmacro define-parser-for-array-of (inner-type
-                                      &key (nullable ':error)
-                                           (default '+ignore+))
+                                      &key (array-nullable 't)
+                                           (array-default 'nil)
+                                           (element-nullable ':error)
+                                           (element-default '+ignore+))
   (let* ((base-name (symbol-name inner-type))
          (type-name (intern (format nil "ARRAY-OF-~A" base-name) *package*))
          (parser-name (intern (format nil "PARSE-JSON-~A" type-name) *package*))
+         (nullable (gensym "NULLABLE-"))
+         (default (gensym "DEFAULT-"))
          (inner-parser-name (intern (format nil "PARSE-JSON-~A" base-name) *package*)))
-    `(defun ,parser-name (object state path)
-       (if (not (json-array-p object))
-           (parser-error object ',type-name path)
-           (loop
-              :for element :in (cdr object)
-              :for index :upfrom 0
-              :for new-path := (cons index path)
-              :for parsed := (,inner-parser-name element state new-path :nullable ,nullable :default ,default)
-              :unless (ignorep parsed) :collect parsed)))))
+    `(defun ,parser-name (object state path
+                          &key ((:nullable ,nullable) ,array-nullable)
+                               ((:default ,default) ,array-default))
+       (invoke-with-parser-restarts (lambda (object state path)
+                                      (if (not (json-array-p object))
+                                          (parser-error object ',type-name path)
+                                          (loop
+                                             :for element :in (cdr object)
+                                             :for index :upfrom 0
+                                             :for new-path := (cons index path)
+                                             :for parsed := (,inner-parser-name element state new-path :nullable ,element-nullable :default ,element-default)
+                                             :unless (ignorep parsed) :collect parsed)))
+                                    object state path
+                                    :nullable ,nullable
+                                    :default ,default))))
 
 
+(defmacro define-parser-for-container-of (inner-type elements
+                                          &key (container-nullable 't)
+                                               (container-default '+ignore+)
+                                               (element-nullable ':error)
+                                               (element-default '+ignore+))
+  (let* ((base-name (symbol-name inner-type))
+         (type-name (intern (format nil "CONTAINER-OF-~A" base-name) *package*))
+         (parser-name (intern (format nil "PARSE-JSON-~A" type-name) *package*))
+         (element-parser (intern (format nil "PARSE-JSON-ARRAY-OF-~A" inner-type) *package*))
+         (nullable (gensym "NULLABLE-"))
+         (default (gensym "DEFAULT-")))
+    `(defun ,parser-name (object state path
+                          &key ((:nullable ,nullable) ,container-nullable)
+                               ((:default ,default) ,container-default))
+       (invoke-with-parser-restarts (lambda (object state path)
+                                      (cond
+                                        ((eq object :null)
+                                         (case ,nullable
+                                           ((t :null) ,default)
+                                           (otherwise (parser-error object '(:strict ,type-name) path))))
+                                        ((not (json-object-p object)) (parser-error object ',type-name path))
+                                        (t (loop
+                                              :with offset := 0 :and limit := nil :and total := 0 
+                                                :and elements := nil
+                                              :for (key value) :on (cdr object) :by #'cddr
+                                              :for new-path := (cons key path)
+                                              :do (cond
+                                                    ((string= key "startAt") (setf offset (parse-json-integer value state new-path)))
+                                                    ((string= key "maxResults") (setf limit (parse-json-integer value state new-path)))
+                                                    ((string= key "total") (setf total (parse-json-integer value state new-path)))
+                                                    ((string= key ,elements) (setf elements (,element-parser value state new-path
+                                                                                                             :nullable ,element-nullable
+                                                                                                             :default ,element-default))))
+                                              :finally (return (make-instance 'container :offset offset :limit limit :total total
+                                                                              :elements elements))))))
+                                    object state path 
+                                    :nullable ,nullable
+                                    :default ,default))))
 
 
 (define-json-parser string (value state path)
@@ -247,6 +295,19 @@
   (cond
     ((stringp value)
      (let ((parsed (parse-timestring value :fail-on-error nil)))
+       (or parsed
+           (parser-error value 'timestamp path))))
+    (t (parser-error value 'timestamp path))))
+
+
+(define-json-parser date (value state path)
+  (declare (ignore state))
+  (cond
+    ((stringp value)
+     (let ((parsed (parse-timestring value 
+                                     :fail-on-error nil 
+                                     :allow-missing-date-part nil
+                                     :allow-missing-time-part t)))
        (or parsed
            (parser-error value 'timestamp path))))
     (t (parser-error value 'timestamp path))))
@@ -378,6 +439,58 @@
                          'icon-uri icon-uri)))))
 
 
+(define-json-parser comment (object state path)
+  (if (not (json-object-p object))
+      (parser-error object 'comment path)
+      (let (uri id body author editor created edited)
+        (loop
+           :for (key value) :on (cdr object) :by #'cddr
+           :for new-path := (cons key path)
+           :do (string-case (key)
+                 ("self" (setf uri (parse-json-uri value state new-path)))
+                 ("id" (setf id (parse-json-string value state new-path)))
+                 ("body" (setf body (parse-json-string value state new-path :nullable t)))
+                 ("author" (setf author (parse-json-user value state new-path :nullable t)))
+                 ("updateAuthor" (setf author (parse-json-user value state new-path :nullable t)))
+                 ("created" (setf created (parse-json-timestamp value state new-path :nullable t)))
+                 ("updated" (setf edited (parse-json-timestamp value state new-path :nullable t)))
+                 (t nil)))
+        (interning state (cons 'comment id)
+          (make-instance 'comment
+                         :id id 'uri uri 
+                         :body body :author author
+                         :editor editor :created created
+                         :edited edited)))))
+
+
+(define-parser-for-array-of comment)
+(define-parser-for-container-of comment "comments")
+
+
+(define-json-parser component (object state path)
+  (if (not (json-object-p object))
+      (parser-error object 'component path)
+      (let (uri name id description icon-uri)
+        (loop
+           :for (key value) :on (cdr object) :by #'cddr
+           :for new-path := (cons key path)
+           :do (string-case (key)
+                 ("self" (setf uri (parse-json-uri value state new-path)))
+                 ("id" (setf id (parse-json-string value state new-path)))
+                 ("name" (setf name (parse-json-string value state new-path)))
+                 ("description" (setf description (parse-json-string value state new-path :nullable t :default nil)))
+                 ("iconUrl" (setf icon-uri (parse-json-uri value state new-path :nullable t :default nil)))
+                 (t nil)))
+        (interning state (cons 'component id)
+          (make-instance 'component
+                         :id id 'uri uri 
+                         :name name
+                         :description description
+                         'icon-uri icon-uri)))))
+
+
+(define-parser-for-array-of component)
+
 
 (define-json-parser issue (object state path)
   (if (not (json-object-p object))
@@ -415,6 +528,10 @@
                                     ("priority" (pushattr :priority parse-json-priority))
                                     ("summary" (pushattr :summary parse-json-string))
                                     ("description" (pushattr :description parse-json-string))
+                                    ("components" (pushattr :components parse-json-array-of-component))
+                                    ("resolutiondate" (pushattr :resolution-date parse-json-date))
+                                    ("duedate" (pushattr :due-date parse-json-date))
+                                    ("comment" (pushattr :comment parse-json-container-of-comment))
                                     (t nil))))))
                      (t nil)))))
         (interning state (cons 'issue id)
@@ -430,6 +547,33 @@
 (define-parser-for-array-of status)
 (define-parser-for-array-of priority)
 (define-parser-for-array-of resolution)
+
+
+(define-json-parser project (object state path)
+  (if (not (json-object-p object))
+      (parser-error object 'project path)
+      (let (uri name id rkey description avatars issue-types
+            components lead)
+        (loop
+           :for (key value) :on (cdr object) :by #'cddr
+           :for new-path := (cons key path)
+           :do (string-case (key)
+                 ("self" (setf uri (parse-json-uri value state new-path)))
+                 ("id" (setf id (parse-json-string value state new-path)))
+                 ("key" (setf rkey (parse-json-string value state new-path)))
+                 ("name" (setf name (parse-json-string value state new-path)))
+                 ("description" (setf description (parse-json-string value state new-path :nullable t :default nil)))
+                 ("components" (setf components (parse-json-array-of-component value state new-path)))
+                 ("issueTypes" (setf issue-types (parse-json-array-of-issue-type value state new-path)))
+                 ("lead" (setf lead (parse-json-user value state new-path)))
+                 ("avatarUrls" (setf avatars (parse-json-avatar-list value state new-path)))
+                 (t nil)))
+        (interning state (cons 'project id)
+          (make-instance 'project
+                         'uri uri :id id :key rkey 
+                         :name name :description description
+                         :components components :issue-types issue-types
+                         :lead lead :avatars avatars)))))
 
 
 (define-json-parser search-result (object state path)
@@ -449,7 +593,7 @@
 (defun find-issue (key-or-id &key (session *default-session*) 
                                   (fields "*all,-comment,-attachment,-worklog")
                                   (expand nil) (if-does-not-exist :error)
-                                  (default nil) (object-cache nil))
+                                  (default nil) (object-cache nil) (include-json nil))
   "Obtains information about the issue identified by `key-or-id' from
    the Jira backend referenced by `session'. The value of `fields'
    determines, which data fields should be included in the result.
@@ -471,12 +615,12 @@
                                             :session session 
                                             :parameters parameters)
                       (values (parse-json-issue body object-cache nil)
-                              t))
+                              t (and include-json body)))
         (transport-error (condition)
           (if (eql (transport-error-status condition) 404)
               (ecase if-does-not-exist
                 ((:error) (error condition))
-                ((:default) (values default nil)))))))))
+                ((:default) (values default nil (and include-json (transport-error-body condition)))))))))))
 
 
 (defun find-user (username &key (session *default-session*)
@@ -501,6 +645,22 @@
             (ecase if-does-not-exist
               ((:error) (error condition))
               ((:default) (values default nil))))))))
+
+
+(defun find-project (id-or-key &key (session *default-session*)
+                                    (if-does-not-exist :error) (default nil)
+                                    (object-cache nil) (include-json nil))
+  (handler-case (with-json-result (body (format nil "project/~A" id-or-key) :session session)
+                  (values (parse-json-project body object-cache nil) t
+                          (and include-json body)))
+      (transport-error (condition)
+        (if (eql (transport-error-status condition) 404)
+            (ecase if-does-not-exist
+              ((:error) (error condition))
+              ((:default) (values default 
+                                  nil
+                                  (and include-json
+                                       (transport-error-body condition)))))))))
 
 
 (defun search-issues (query &key (session *default-session*) 

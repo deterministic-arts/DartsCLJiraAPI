@@ -103,6 +103,90 @@
     (format stream "~S" (or (user-display-name object) (user-name object)))))
 
 
+(defclass container (annotatable)
+  ((offset 
+     :type (integer 0) :initform 0 :initarg :offset
+     :reader container-offset)
+   (limit
+     :type (integer 0) :initform 0 :initarg :limit
+     :reader container-limit)
+   (total
+     :type (integer 0) :initform 0 :initarg :total
+     :reader container-total)
+   (elements
+     :type list :initform nil :initarg :elements
+     :reader container-elements)))
+
+
+(defmethod print-object ((object container) stream)
+  (print-unreadable-object (object stream :type t :identity t)
+    (format stream "~D of ~D (offset ~D limit ~D)"
+            (length (container-elements object))
+            (container-total object)
+            (container-offset object)
+            (container-limit object))))
+
+(defun map-container-elements (function container)
+  (map nil function (container-elements container)))
+
+
+
+(defclass project (resource)
+  ((id
+     :type string :initarg :id 
+     :reader project-id)
+   (key
+     :type string :initarg :key
+     :reader project-key)
+   (description
+     :type (or null string) :initform nil :initarg :description
+     :reader project-description)
+   (lead
+     :type (or null user) :initform nil :initarg :lead
+     :reader project-lead)
+   (components
+     :type list :initform nil :initarg :components
+     :reader project-components)
+   (issue-types
+     :type list :initform nil :initarg :issue-types
+     :reader project-issue-types)
+   (name 
+     :type (or null string) :initform nil :initarg :name
+     :reader project-name)
+   (avatars
+     :type list :initarg :avatars
+     :reader project-avatars)))
+
+
+(defmethod print-object ((object project) stream)
+  (print-unreadable-object (object stream :type t :identity t)
+    (format stream "~A~@[ ~S~]" (project-id object) (or (project-name object) (project-key object)))))
+
+
+
+(defclass comment (resource)
+  ((id 
+     :type string :initarg :id
+     :reader comment-id)
+   (body
+     :type (or null string) :initform nil :initarg :body
+     :reader comment-body)
+   (author 
+     :type (or null user) :initform nil :initarg :author
+     :reader comment-author)
+   (editor
+     :type (or null user) :initform nil :initarg :editor
+     :reader comment-editor)
+   (created
+     :type (or null timestamp) :initform nil :initarg :created
+     :reader comment-created)
+   (edited
+     :type (or null timestamp) :initform nil :initarg :edited
+     :reader comment-edited)))
+
+
+
+
 (defclass descriptor (resource)
   ((id
      :type (or null string) :initarg :id
@@ -142,6 +226,7 @@
 (defclass status (descriptor) ())
 (defclass resolution (descriptor) ())
 (defclass issue-type (descriptor) ())
+(defclass component (descriptor) ())
 
 
 (defclass issue (resource)
@@ -230,16 +315,20 @@
 
 
 (define-reader-aliases resource-uri
-  user-uri issue-uri priority-uri status-uri resolution-uri issue-type-uri)
+  user-uri issue-uri priority-uri status-uri resolution-uri issue-type-uri
+  component-uri project-uri comment-uri)
 
 (define-reader-aliases descriptor-id 
-  priority-id status-id resolution-id issue-type-id)
+  priority-id status-id resolution-id issue-type-id component-id)
 
 (define-reader-aliases descriptor-name
-  priority-name status-name resolution-name issue-type-name)
+  priority-name status-name resolution-name issue-type-name
+  component-name)
 
 (define-reader-aliases descriptor-description
-  priority-description status-description resolution-description issue-type-description)
+  priority-description status-description resolution-description issue-type-description
+  component-description)
 
 (define-reader-aliases descriptor-icon-uri
-  priority-icon-uri status-icon-uri resolution-icon-uri issue-type-icon-uri)
+  priority-icon-uri status-icon-uri resolution-icon-uri issue-type-icon-uri
+  component-icon-uri)
