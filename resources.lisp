@@ -185,6 +185,26 @@
      :reader comment-edited)))
 
 
+(defclass issue-link-type (resource)
+  ((id
+     :type string :initarg :id
+     :reader issue-link-type-id)
+   (name
+     :type (or null string) :initform nil :initarg :name
+     :reader issue-link-type-name)
+   (inwards
+     :type (or null string) :initform nil :initarg :inwards
+     :reader issue-link-type-inwards)
+   (outwards
+     :type (or null string) :initform nil :initarg :outwards
+     :reader issue-link-type-outwards)))
+
+
+(defmethod print-object ((object issue-link-type) stream)
+  (print-unreadable-object (object stream :type t :identity t)
+    (format stream "~A~@[ ~S~]" 
+            (issue-link-type-id object) 
+            (issue-link-type-name object))))
 
 
 (defclass descriptor (resource)
@@ -301,6 +321,23 @@
         (when below-id (funcall function :id (issue-id issue)))
         (when below-key (funcall function :key (issue-key issue)))))
     nil)
+
+
+
+(defclass issue-link (resource)
+  ((id
+     :type string :initarg :id
+     :reader issue-link-type-id)
+   (type
+     :type (or null issue-link-type) :initform nil :initarg :type
+     :reader issue-link-type)
+   (inward-issue
+     :type (or null issue) :initform nil :initarg :inward-issue
+     :reader issue-link-inward-issue)
+   (outward-issue
+     :type (or null issue) :initform nil :initarg :outward-issue
+     :reader issue-link-outward-issue)))
+
     
 
 
@@ -316,7 +353,7 @@
 
 (define-reader-aliases resource-uri
   user-uri issue-uri priority-uri status-uri resolution-uri issue-type-uri
-  component-uri project-uri comment-uri)
+  component-uri project-uri comment-uri issue-link-type-uri issue-link-uri)
 
 (define-reader-aliases descriptor-id 
   priority-id status-id resolution-id issue-type-id component-id)

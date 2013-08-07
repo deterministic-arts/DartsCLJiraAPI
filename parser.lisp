@@ -417,6 +417,27 @@
                          'icon-uri icon-uri)))))
 
 
+(define-json-parser issue-link-type (object state path)
+  (if (not (json-object-p object))
+      (parser-error object 'issue-link-type path)
+      (let (uri id name inwards outwards)
+        (loop
+           :for (key value) :on (cdr object) :by #'cddr
+           :for new-path := (cons key path)
+           :do (string-case (key)
+                 ("self" (setf uri (parse-json-uri value state new-path)))
+                 ("id" (setf id (parse-json-string value state new-path)))
+                 ("name" (setf name (parse-json-string value state new-path :nullable t :default nil)))
+                 ("inwards" (setf inwards (parse-json-string value state new-path :nullable t :default nil)))
+                 ("outwards" (setf outwards (parse-json-string value state new-path :nullable t :default nil)))
+                 (t nil)))
+        (interning state (cons 'issue-link-type id)
+          (make-instance 'issue-link-type
+                         :id id 'uri uri 
+                         :name name :inwards inwards
+                         :outwards outwards)))))
+
+
 (define-json-parser issue-type (object state path)
   (if (not (json-object-p object))
       (parser-error object 'issue-type path)
@@ -437,6 +458,8 @@
                          :name name
                          :description description
                          'icon-uri icon-uri)))))
+
+(define-parser-for-array-of issue-type)
 
 
 (define-json-parser comment (object state path)
@@ -492,6 +515,33 @@
 (define-parser-for-array-of component)
 
 
+(define-json-parser project (object state path)
+  (if (not (json-object-p object))
+      (parser-error object 'project path)
+      (let (uri name id rkey description avatars issue-types
+            components lead)
+        (loop
+           :for (key value) :on (cdr object) :by #'cddr
+           :for new-path := (cons key path)
+           :do (string-case (key)
+                 ("self" (setf uri (parse-json-uri value state new-path)))
+                 ("id" (setf id (parse-json-string value state new-path)))
+                 ("key" (setf rkey (parse-json-string value state new-path)))
+                 ("name" (setf name (parse-json-string value state new-path)))
+                 ("description" (setf description (parse-json-string value state new-path :nullable t :default nil)))
+                 ("components" (setf components (parse-json-array-of-component value state new-path)))
+                 ("issueTypes" (setf issue-types (parse-json-array-of-issue-type value state new-path)))
+                 ("lead" (setf lead (parse-json-user value state new-path)))
+                 ("avatarUrls" (setf avatars (parse-json-avatar-list value state new-path)))
+                 (t nil)))
+        (interning state (cons 'project id)
+          (make-instance 'project
+                         'uri uri :id id :key rkey 
+                         :name name :description description
+                         :components components :issue-types issue-types
+                         :lead lead :avatars avatars)))))
+
+
 (define-json-parser issue (object state path)
   (if (not (json-object-p object))
       (parser-error object 'issue-type path)
@@ -532,6 +582,8 @@
                                     ("resolutiondate" (pushattr :resolution-date parse-json-date))
                                     ("duedate" (pushattr :due-date parse-json-date))
                                     ("comment" (pushattr :comment parse-json-container-of-comment))
+                                    ("project" (pushattr :project parse-json-project))
+                                    ("issuelinks" (pushattr :issue-links parse-json-array-of-issue-link))
                                     (t nil))))))
                      (t nil)))))
         (interning state (cons 'issue id)
@@ -542,38 +594,32 @@
                          :fields attrs)))))
 
 
-(define-parser-for-array-of issue)
-(define-parser-for-array-of issue-type)
-(define-parser-for-array-of status)
-(define-parser-for-array-of priority)
-(define-parser-for-array-of resolution)
-
-
-(define-json-parser project (object state path)
+(define-json-parser issue-link (object state path)
   (if (not (json-object-p object))
-      (parser-error object 'project path)
-      (let (uri name id rkey description avatars issue-types
-            components lead)
+      (parser-error object 'issue-link path)
+      (let (uri id type inwards outwards)
         (loop
            :for (key value) :on (cdr object) :by #'cddr
            :for new-path := (cons key path)
            :do (string-case (key)
                  ("self" (setf uri (parse-json-uri value state new-path)))
                  ("id" (setf id (parse-json-string value state new-path)))
-                 ("key" (setf rkey (parse-json-string value state new-path)))
-                 ("name" (setf name (parse-json-string value state new-path)))
-                 ("description" (setf description (parse-json-string value state new-path :nullable t :default nil)))
-                 ("components" (setf components (parse-json-array-of-component value state new-path)))
-                 ("issueTypes" (setf issue-types (parse-json-array-of-issue-type value state new-path)))
-                 ("lead" (setf lead (parse-json-user value state new-path)))
-                 ("avatarUrls" (setf avatars (parse-json-avatar-list value state new-path)))
+                 ("type" (setf type (parse-json-issue-link-type value state new-path)))
+                 ("inwardIssue" (setf inwards (parse-json-issue value state new-path)))
+                 ("outwardIssue" (setf outwards (parse-json-issue value state new-path)))
                  (t nil)))
-        (interning state (cons 'project id)
-          (make-instance 'project
-                         'uri uri :id id :key rkey 
-                         :name name :description description
-                         :components components :issue-types issue-types
-                         :lead lead :avatars avatars)))))
+        (interning state (cons 'issue-link id)
+          (make-instance 'issue-link
+                         'uri uri :id id
+                         :type type :inward-issue inwards
+                         :outward-issue outwards)))))
+
+
+(define-parser-for-array-of issue-link)
+(define-parser-for-array-of issue)
+(define-parser-for-array-of status)
+(define-parser-for-array-of priority)
+(define-parser-for-array-of resolution)
 
 
 (define-json-parser search-result (object state path)
