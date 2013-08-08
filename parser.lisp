@@ -155,6 +155,40 @@
 ;;; which would make the parser functions nicer to use in a stand-
 ;;; alone fashion.
 
+(defmacro object-field-dispatch (((key value path) object &optional old-path) &body clauses)
+  (let ((rkey (gensym))
+        (obvar (gensym))
+        (ptvar (gensym)))
+    `(loop
+        :with ,obvar := ,object :and ,ptvar := ,old-path
+        :for (,rkey ,value) :on (cdr ,obvar) :by #'cddr
+        :for ,key := ,rkey
+        :for ,path := (cons ,rkey ,ptvar)
+        :do (string-case (,rkey)
+              ,@clauses))))
+
+
+(defmacro with-parser ((state path &optional (name 'parse)) &body body)
+  (let ((value (gensym))
+        (type (gensym))
+        (nullable (gensym))
+        (default (gensym))
+        (uname (gensym)))
+    `(macrolet ((,name (,value ,type &key ((:nullable ,nullable) ':error) ((:default ,default) '+ignore+))
+                  (let ((,uname (intern (format nil "PARSE-JSON-~A" (symbol-name ,type)) *package*)))
+                    (list ,uname ,value ',state ',path :nullable ,nullable :default ,default))))
+       ,@body)))
+
+
+(defmacro ensuring-object ((object form &optional (path 'nil) (type ''resource)) &body body)
+  (let ((bvar (gensym)))
+    `(let ((,bvar ,form))
+       (if (not (json-object-p ,bvar))
+           (parser-error ,bvar ,type ,path)
+           (let ((,object ,bvar))
+             ,@body)))))
+  
+
 
 (defmacro define-json-parser (type-name (value-var state-var path-var) &body body)
   (let* ((package *package*)
@@ -330,25 +364,22 @@
 
 
 (define-json-parser user (object state path)
-  (if (not (json-object-p object))
-      (parser-error object 'user path)
-      (let (name display-name uri email-address avatars)
-        (loop
-           :for (key value) :on (cdr object) :by #'cddr
-           :for new-path := (cons key path)
-           :do (string-case (key)
-                 ("self" (setf uri (parse-json-uri value state new-path)))
-                 ("name" (setf name (parse-json-string value state new-path)))
-                 ("displayName" (setf display-name (parse-json-string value state new-path :nullable t :default nil)))
-                 ("emailAddress" (setf email-address (parse-json-string value state new-path :nullable t :default nil)))
-                 ("avatarUrls" (setf avatars (parse-json-avatar-list value state new-path :nullable t :default nil)))
-                 (t nil)))
-        (interning state (cons 'user name)
-          (make-instance 'user 
-                         :uri uri :name name
-                         :display-name display-name
-                         :email-address email-address
-                         :avatars avatars)))))
+  (ensuring-object (object object path 'user)
+    (let (name display-name uri email-address avatars)
+      (with-parser (state new-path)
+        (object-field-dispatch ((key value new-path) object path)
+          ("self" (setf uri (parse value uri)))
+          ("name" (setf name (string value)))
+          ("displayName" (setf display-name (parse value string :nullable t :default nil)))
+          ("emailAddress" (setf email-address (parse value string :nullable t :default nil)))
+          ("avatarUrls" (setf avatars (parse value avatar-list :nullable t :default nil)))
+          (t nil)))
+      (interning state (cons 'user name)
+        (make-instance 'user 
+                       :uri uri :name name
+                       :display-name display-name
+                       :email-address email-address
+                       :avatars avatars)))))
 
 
 (define-json-parser priority (object state path)
@@ -460,6 +491,7 @@
                          'icon-uri icon-uri)))))
 
 (define-parser-for-array-of issue-type)
+
 
 
 (define-json-parser comment (object state path)
