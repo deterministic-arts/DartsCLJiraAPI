@@ -23,6 +23,8 @@
 
 (in-package "DARTS.LIB.JIRA-API")
 
+;; Forward declaration
+(declaim (ftype (function (session) attribute-tree) session-schema-field-index))
 
 (defvar +ignore+ (gensym "IGNORE-VALUE")
   "If this value is returned by a parser function, then the
@@ -104,6 +106,21 @@
 
 (defun json-array-p (value)
   (and (consp value) (eq :array (car value))))
+
+
+(defun null-parser (value state path &key (session nil) (nullable t) (default +ignore+))
+  (declare (ignore state session))
+  (if (eq value :null)
+      (case nullable 
+        ((t :null) default)
+        (otherwise (parser-error value 'anything path)))
+      (cond
+        ((eq value :true) t)
+        ((eq value :false) nil)
+        ((stringp value) value)
+        ((numberp value) value)
+        ((consp value) value)
+        (t (error "internal error: bad JSON value ~S" value)))))
 
 
 ;;; A parser function is a function 
@@ -190,7 +207,7 @@
   
 
 
-(defmacro define-json-parser (type-name (value-var state-var path-var) &body body)
+(defmacro define-json-parser (type-name (value-var state-var path-var &optional session-var) &body body)
   (let* ((package *package*)
          (base-name (symbol-name type-name))
          (name (intern (format nil "PARSE-JSON-~A" base-name) package))
@@ -198,10 +215,13 @@
          (default (gensym "DEFAULT-"))
          (vvar (gensym "JSON-VALUE-"))
          (svar (gensym "STATE-"))
-         (pvar (gensym "PATH-")))
+         (pvar (gensym "PATH-"))
+         (evar (or session-var (gensym "SESSION-"))))
     `(defun ,name (,vvar ,svar ,pvar 
-                   &key ((:nullable ,nullable) nil)
+                   &key ((:session ,evar) *default-session*)
+                        ((:nullable ,nullable) nil)
                         ((:default ,default) +ignore+))
+       ,@(unless session-var `((declare (ignore ,evar))))
        (invoke-with-parser-restarts (lambda (,vvar ,svar ,pvar)
                                       (if (eq ,vvar ':null)
                                           (case ,nullable
@@ -226,11 +246,13 @@
   (let* ((base-name (symbol-name inner-type))
          (type-name (intern (format nil "ARRAY-OF-~A" base-name) *package*))
          (parser-name (intern (format nil "PARSE-JSON-~A" type-name) *package*))
+         (session (gensym "SESSION-"))
          (nullable (gensym "NULLABLE-"))
          (default (gensym "DEFAULT-"))
          (inner-parser-name (intern (format nil "PARSE-JSON-~A" base-name) *package*)))
     `(defun ,parser-name (object state path
-                          &key ((:nullable ,nullable) ,array-nullable)
+                          &key ((:session ,session) *default-session*)
+                               ((:nullable ,nullable) ,array-nullable)
                                ((:default ,default) ,array-default))
        (invoke-with-parser-restarts (lambda (object state path)
                                       (if (not (json-array-p object))
@@ -239,7 +261,10 @@
                                              :for element :in (cdr object)
                                              :for index :upfrom 0
                                              :for new-path := (cons index path)
-                                             :for parsed := (,inner-parser-name element state new-path :nullable ,element-nullable :default ,element-default)
+                                             :for parsed := (,inner-parser-name element state new-path 
+                                                                                :session ,session
+                                                                                :nullable ,element-nullable 
+                                                                                :default ,element-default)
                                              :unless (ignorep parsed) :collect parsed)))
                                     object state path
                                     :nullable ,nullable
@@ -255,10 +280,12 @@
          (type-name (intern (format nil "CONTAINER-OF-~A" base-name) *package*))
          (parser-name (intern (format nil "PARSE-JSON-~A" type-name) *package*))
          (element-parser (intern (format nil "PARSE-JSON-ARRAY-OF-~A" inner-type) *package*))
+         (session (gensym "SESSION-"))
          (nullable (gensym "NULLABLE-"))
          (default (gensym "DEFAULT-")))
     `(defun ,parser-name (object state path
-                          &key ((:nullable ,nullable) ,container-nullable)
+                          &key ((:session ,session) *default-session*)
+                               ((:nullable ,nullable) ,container-nullable)
                                ((:default ,default) ,container-default))
        (invoke-with-parser-restarts (lambda (object state path)
                                       (cond
@@ -277,6 +304,7 @@
                                                     ((string= key "maxResults") (setf limit (parse-json-integer value state new-path)))
                                                     ((string= key "total") (setf total (parse-json-integer value state new-path)))
                                                     ((string= key ,elements) (setf elements (,element-parser value state new-path
+                                                                                                             :session ,session
                                                                                                              :nullable ,element-nullable
                                                                                                              :default ,element-default))))
                                               :finally (return (make-instance 'container :offset offset :limit limit :total total
@@ -297,7 +325,7 @@
   (declare (ignore state))
   (cond
     ((eq value :true) t)
-    ((eq value :nil) nil)
+    ((eq value :false) nil)
     (t (parser-error value 'boolean path))))
 
 
@@ -305,14 +333,14 @@
   (declare (ignore state))
   (cond
     ((integerp value) value)
-    (t (parser-error value 'boolean path))))
+    (t (parser-error value 'integer path))))
 
 
 (define-json-parser number (value state path)
   (declare (ignore state))
   (cond
     ((numberp value) value)
-    (t (parser-error value 'boolean path))))
+    (t (parser-error value 'number path))))
 
 
 (define-json-parser uri (value state path)
@@ -321,7 +349,7 @@
     ((stringp value) 
      (handler-case (parse-uri value)
        (error () (parser-error value 'uri path))))
-    (t (parser-error value 'boolean path))))
+    (t (parser-error value 'uri path))))
 
 
 (define-json-parser timestamp (value state path)
@@ -343,8 +371,8 @@
                                      :allow-missing-date-part nil
                                      :allow-missing-time-part t)))
        (or parsed
-           (parser-error value 'timestamp path))))
-    (t (parser-error value 'timestamp path))))
+           (parser-error value 'date path))))
+    (t (parser-error value 'date path))))
 
 
 (define-json-parser avatar-list (value state path)
@@ -574,10 +602,10 @@
                          :lead lead :avatars avatars)))))
 
 
-(define-json-parser issue (object state path)
+(define-json-parser issue (object state path session)
   (if (not (json-object-p object))
       (parser-error object 'issue-type path)
-      (let ((attrs (attribute-tree)) uri id rkey)
+      (let ((attrs (attribute-tree)) uri id rkey field-index)
         (flet ((remember (kw value)
                  (unless (ignorep value)
                    (setf attrs (wbtree-update kw value attrs))
@@ -616,7 +644,17 @@
                                     ("comment" (pushattr :comment parse-json-container-of-comment))
                                     ("project" (pushattr :project parse-json-project))
                                     ("issuelinks" (pushattr :issue-links parse-json-array-of-issue-link))
-                                    (t nil))))))
+                                    (t (let* ((index (or field-index
+                                                         (and session
+                                                              (setf field-index (session-schema-field-index session)))))
+                                              (field (and index (wbtree-find key index)))
+                                              (parser (or (and field (schema-field-parser field)) #'null-parser)))
+                                         (let ((stored (format nil "X-~A" key))
+                                               (parsed (funcall parser value state new-path
+                                                                :nullable t :default +ignore+
+                                                                :session session)))
+                                           (unless (ignorep parsed)
+                                             (setf attrs (wbtree-update stored parsed attrs)))))))))))
                      (t nil)))))
         (interning state (cons 'issue id)
           (make-instance 'issue
@@ -666,6 +704,105 @@
                ("issues" (setf issues (parse-json-array-of-issue value state new-path)))
                (t nil))
          :finally (return (cons total issues)))))
+
+
+(defun plist-ref (plist indicator &key (default nil) (test #'eql))
+  (loop
+     :for (key value) :on plist :by #'cddr
+     :when (funcall test key indicator)
+     :do (return (values value t))
+     :finally (return (values default nil))))
+
+
+
+(define-json-parser custom-string (value state path session)
+  (cond
+    ((eq value :true) "true")
+    ((eq value :false) "false")
+    ((integerp value) (format nil "~D" value))
+    ((numberp value) (format nil "~F" value))
+    ((stringp value) value)
+    ((consp value)
+     (if (eq (car value) :object)
+         (let ((vtag (plist-ref (cdr value) "value" :test #'string=)))
+           (if vtag 
+               (parse-json-custom-string vtag state (cons "value" path) :session session)
+               (format nil "~S" value)))
+         (format nil "~S" value)))
+    (t (format nil "~S" value))))
+
+
+
+(defparameter *parser-table*
+  (attribute-tree 
+    "string" #'parse-json-custom-string
+    "datetime" #'parse-json-timestamp
+    "date" #'parse-json-date
+    "priority" #'parse-json-priority
+    "issuetype" #'parse-json-issue-type
+    "resolution" #'parse-json-resolution
+    "status" #'parse-json-status
+    "project" #'parse-json-project
+    "user" #'parse-json-user))
+
+
+
+(define-json-parser schema-field (object state path) 
+  (if (not (json-object-p object))
+      (parser-error object 'schema-field path)
+      (let (id name type custom-id plugin orderable searchable navigable)
+        (loop
+           :for (key value) :on (cdr object) :by #'cddr
+           :for new-path := (cons key path)
+           :do (string-case (key)
+                 ("id" (setf id (parse-json-string value state new-path :nullable nil)))
+                 ("name" (setf name (parse-json-string value state new-path :nullable t :default nil)))
+                 ("orderable" (setf orderable (parse-json-boolean value state new-path :nullable t :default nil)))
+                 ("navigable" (setf navigable (parse-json-boolean value state new-path :nullable t :default nil)))
+                 ("searchable" (setf searchable (parse-json-boolean value state new-path :nullable t :default nil)))
+                 ("schema" 
+                  (if (not (json-object-p value))
+                      (parser-error value 'schema-field-schema new-path)
+                      (loop
+                         :for (key value-2) :on (cdr value) :by #'cddr
+                         :for new-path-2 := (cons key new-path)
+                         :do (string-case (key)
+                               ("type" (setf type (parse-json-string value-2 state new-path-2 :nullable nil)))
+                               ("custom" (setf plugin (parse-json-string value-2 state new-path-2 :nullable t :default nil)))
+                               ("customId" (setf custom-id (parse-json-integer value-2 state new-path-2 :nullable t :default nil)))
+                               (t nil)))))
+                 (t nil)))
+        (make-instance 'schema-field 
+                       :id id :name name :type type
+                       :orderable orderable :searchable searchable
+                       :navigable navigable :plugin plugin
+                       :custom-id custom-id))))
+
+
+(define-parser-for-array-of schema-field)
+
+
+(defmethod slot-unbound (class (object schema-field) (slot (eql 'parser)))
+  (declare (ignore slot class))
+  (let ((parser (wbtree-find (schema-field-type object) *parser-table* #'null-parser)))
+    (setf (slot-value object 'parser) parser)))
+
+
+(defun list-schema-fields (&key (session *default-session*) (object-cache nil))
+  (with-json-result (body "field" :session session)
+    (parse-json-array-of-schema-field body object-cache nil :session session)))
+
+
+(defun session-schema-field-index (session)
+  (let ((cached-index (session-attribute session 'schema-field-index)))
+    (or cached-index
+        (let ((all (list-schema-fields :session session))
+              (tree (attribute-tree)))
+          (loop
+             :for field :in all
+             :do (setf tree (wbtree-update (schema-field-id field) field tree)))
+          (setf (session-attribute session 'schema-field-index) tree)
+          tree))))
                    
 
 (defun find-issue (key-or-id &key (session *default-session*) 
@@ -692,7 +829,7 @@
       (handler-case (with-json-result (body (format nil "issue/~A" key-or-id) 
                                             :session session 
                                             :parameters parameters)
-                      (values (parse-json-issue body object-cache nil)
+                      (values (parse-json-issue body object-cache nil :session session)
                               t (and include-json body)))
         (transport-error (condition)
           (if (eql (transport-error-status condition) 404)
@@ -717,7 +854,7 @@
    the parser functions called to intepret the result."
   (let ((parameters `(("username" . ,username))))
     (handler-case (with-json-result (body "user" :session session :parameters parameters)
-                    (values (parse-json-user body object-cache nil) t))
+                    (values (parse-json-user body object-cache nil :session session) t))
       (transport-error (condition)
         (if (eql (transport-error-status condition) 404)
             (ecase if-does-not-exist
@@ -729,7 +866,7 @@
                                     (if-does-not-exist :error) (default nil)
                                     (object-cache nil) (include-json nil))
   (handler-case (with-json-result (body (format nil "project/~A" id-or-key) :session session)
-                  (values (parse-json-project body object-cache nil) t
+                  (values (parse-json-project body object-cache nil :session session) t
                           (and include-json body)))
       (transport-error (condition)
         (if (eql (transport-error-status condition) 404)
@@ -764,25 +901,25 @@
       (with-json-result (body "search" 
                               :session session 
                               :parameters parameters)
-        (let ((result (parse-json-search-result body object-cache nil)))
+        (let ((result (parse-json-search-result body object-cache nil :session session)))
           (values (cdr result) (car result)))))))
 
 
 (defun list-resolutions (&key (session *default-session*) (object-cache nil))
   (with-json-result (body "resolution" :session session)
-    (parse-json-array-of-resolution body object-cache nil)))
+    (parse-json-array-of-resolution body object-cache nil :session session)))
 
 
 (defun list-states (&key (session *default-session*) (object-cache nil))
   (with-json-result (body "status" :session session)
-    (parse-json-array-of-status body object-cache nil)))
+    (parse-json-array-of-status body object-cache nil :session session)))
 
 
 (defun list-priorities (&key (session *default-session*) (object-cache nil))
   (with-json-result (body "priority" :session session)
-    (parse-json-array-of-priority body object-cache nil)))
+    (parse-json-array-of-priority body object-cache nil :session session)))
 
 
 (defun list-issue-types (&key (session *default-session*) (object-cache nil))
   (with-json-result (body "issuetype" :session session)
-    (parse-json-array-of-issue-type body object-cache nil)))
+    (parse-json-array-of-issue-type body object-cache nil :session session)))

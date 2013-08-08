@@ -340,6 +340,63 @@
 
     
 
+(defconstant +orderable-flag+ 1)
+(defconstant +searchable-flag+ 2)
+(defconstant +navigable-flag+ 4)
+(defconstant +custom-flag+ 8)
+
+(defclass schema-field ()
+  ((id
+     :type string :initarg :id
+     :reader schema-field-id)
+   (name
+     :type string :initarg :name
+     :reader schema-field-name)
+   (flags 
+     :type (unsigned-byte 32) :initarg flags
+     :reader schema-field-flags)
+   (type
+     :type string :initarg :type
+     :reader schema-field-type)
+   (custom-id
+     :type (or null (integer 0)) :initform nil :initarg :custom-id
+     :reader schema-field-custom-id)
+   (plugin
+     :type (or null string) :initform nil :initarg :plugin
+     :reader schema-field-plugin)
+   (parser
+     :type (or symbol function) :initarg :parser
+     :reader schema-field-parser)))
+
+
+(defmethod print-object ((object schema-field) stream)
+  (print-unreadable-object (object stream :type t :identity t)
+    (format stream "~S ~S" 
+            (schema-field-id object)
+            (schema-field-type object))))
+
+
+(defmethod initialize-instance :after ((object schema-field) &key (orderable nil) (searchable nil) (navigable nil) &allow-other-keys)
+  (unless (slot-boundp object 'flags)
+    (setf (slot-value object 'flags)
+          (logior (if orderable +orderable-flag+ 0)
+                  (if searchable +searchable-flag+ 0)
+                  (if navigable +navigable-flag+ 0)
+                  (if (schema-field-custom-id object) +custom-flag+ 0)))))
+
+
+(defun schema-field-orderable-p (field)
+  (not (zerop (logand (schema-field-flags field) +orderable-flag+))))
+
+(defun schema-field-searchable-p (field)
+  (not (zerop (logand (schema-field-flags field) +searchable-flag+))))
+
+(defun schema-field-navigable-p (field)
+  (not (zerop (logand (schema-field-flags field) +navigable-flag+))))
+
+(defun schema-field-custom-p (field)
+  (not (zerop (logand (schema-field-flags field) +custom-flag+))))
+
 
 
 

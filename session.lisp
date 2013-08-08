@@ -113,6 +113,17 @@
 
 
 
+(defun session-attribute (session key &optional default)
+  (wbtree-find key (session-attributes session) default))
+
+(defun (setf session-attribute) (new-value session key &optional default)
+  (declare (ignore default))
+  (setf (session-attributes session) (wbtree-update key new-value (session-attributes session)))
+  new-value)
+
+
+
+
 (defgeneric expand-resource-uri (uri base)
   (:method (uri (base uri)) (merge-uris uri base))
   (:method (uri (base connector)) (merge-uris uri (connector-base-uri base)))
