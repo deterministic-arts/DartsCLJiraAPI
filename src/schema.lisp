@@ -740,7 +740,7 @@
                                (or (wbtree-find custom-id custom-index)
                                    (make-instance 'mapped-field :definition field :value-type +json+))))
                 (actual (or override (make-instance 'mapped-field :definition field)))
-                (key (mapped-field-key actual)))
+                (key (schema-field-id field)))
            (setf index (wbtree-update key actual index)))
      :finally (return index)))
 
