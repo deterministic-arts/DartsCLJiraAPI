@@ -677,12 +677,18 @@
                 '(synthetic)))))
 
 
+(defun derive-field-key (value)
+  (let* ((upcased (string-upcase value))
+         (hyphenated (substitute #\- #\_ upcased)))
+    hyphenated))
+
+
 (defmethod initialize-instance :after ((object mapped-field) &key &allow-other-keys)
   (let ((definition (mapped-field-definition object)))
     (when definition
       (let ((fid (schema-field-id definition))
             (ftype (schema-field-type definition)))
-        (unless (slot-boundp object 'key) (setf (slot-value object 'key) fid))
+        (unless (slot-boundp object 'key) (setf (slot-value object 'key) (derive-field-key fid)))
         (unless (slot-boundp object 'value-type)
           (let ((rtype (or (wbtree-find fid *field-overrides*)
                            (wbtree-find ftype *base-value-types*))))
@@ -693,7 +699,8 @@
 
 (defun mapped-field-id (field)
   (let ((definition (mapped-field-definition field)))
-    (and definition (schema-field-id definition))))
+    (or (and definition (schema-field-id definition))
+        (mapped-field-key field))))
 
 (defun mapped-field-name (field)
   (let ((definition (mapped-field-definition field)))
@@ -933,18 +940,35 @@
 
 
 
-(defun make-custom-field (id 
+(defun make-custom-field (custom-id 
                           &key (navigable nil) (searchable nil) (orderable nil)
-                               (plugin nil) (key (format nil "customfield_~D" id))
-                               (name "Custom Field") (type "custom") value-type)
+                               (plugin nil) 
+                               (id (format nil "customfield_~D" custom-id))
+                               (key (derive-field-key id))
+                               (name "Custom Field") (type "custom") 
+                               value-type)
   (let ((base-field (make-instance 'schema-field 
-                                            :id key :name name :orderable orderable
-                                            :searchable searchable :navigable navigable
-                                            :plugin plugin :custom-id id :type type)))
+                                   :id id :name name :orderable orderable
+                                   :searchable searchable :navigable navigable
+                                   :plugin plugin :custom-id custom-id 
+                                   :type type)))
+    (if (not value-type)
+        (make-instance 'mapped-field :definition base-field :key key)
+        (make-instance 'mapped-field :definition base-field :key key :value-type value-type))))
+
+(defun make-mapped-field (id 
+                          &key (navigable nil) (searchable nil) (orderable nil)
+                               (plugin nil) 
+                               (key (derive-field-key id))
+                               (custom-id nil)
+                               (name "Custom Field") (type "custom") 
+                               value-type)
+  (let ((base-field (make-instance 'schema-field 
+                                   :id id :name name :orderable orderable
+                                   :searchable searchable :navigable navigable
+                                   :plugin plugin :custom-id custom-id 
+                                   :type type)))
     (if (not value-type)
         (make-instance 'mapped-field :definition base-field :key key)
         (make-instance 'mapped-field :definition base-field :key key :value-type value-type))))
                        
-                 
-                 
-                                            
