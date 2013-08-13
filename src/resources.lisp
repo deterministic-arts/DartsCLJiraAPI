@@ -287,7 +287,7 @@
      :type (or null string) :initarg :description
      :reader descriptor-description)
    (icon-uri
-     :type (or null uri) :initarg uri
+     :type (or null uri) :initarg icon-uri
      :reader descriptor-icon-uri))
   (:documentation "Base class for simple descriptor resources,
     which are used by Jira to represent things like issue types,

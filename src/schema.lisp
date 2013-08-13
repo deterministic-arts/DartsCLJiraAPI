@@ -757,7 +757,7 @@
     
 
 
-(defclass mapped-field ()
+(defclass mapped-field (annotatable)
   ((key
      :type string :initarg :key
      :reader mapped-field-key)
