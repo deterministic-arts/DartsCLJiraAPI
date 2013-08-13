@@ -484,6 +484,45 @@
 
 
 
+
+(defclass worklog-value-type (value-type) ()
+  (:default-initargs
+    :display-name "Worklog"
+    :lisp-type 'worklog))
+
+(defparameter +worklog+ (make-instance 'worklog-value-type))
+
+(defmethod parse-json-value* ((object cons) (type worklog-value-type) state session path)
+  (if (not (eq (car object) :object))
+      (call-next-method)
+      (let (uri id comment author editor created edited started duration)
+        (loop
+           :for (key value) :on (cdr object) :by #'cddr
+           :for new-path := (cons key path)
+           :do (macrolet ((parse (type &rest options)
+                            `(parse-json-value value ,type :path new-path :state state :session session 
+                                               ,@options)))
+                 (string-case (key)
+                   ("self" (setf uri (parse +uri+ :required t)))
+                   ("id" (setf id (parse +string+ :required t)))
+                   ("comment" (setf comment (parse +string+ :required nil)))
+                   ("author" (setf author (parse +user+ :required nil)))
+                   ("updateAuthor" (setf editor (parse +user+ :required nil)))
+                   ("timeSpentSeconds" (setf duration (parse +integer+ :required nil :default 0)))
+                   ("started" (setf started (parse +timestamp+ :required nil)))
+                   ("created" (setf created (parse +timestamp+ :required nil)))
+                   ("updated" (setf edited (parse +timestamp+ :required nil)))
+                   (t nil))))
+        ;;(format t "~&~S~%URI IS ~S ID ~S~%" object uri id)
+        (registering worklog (id) 
+          (make-instance 'worklog
+                         'uri uri :id id 
+                         :comment comment :author author :editor editor
+                         :started started :duration duration
+                         :created created :edited edited)))))
+  
+
+
 (defclass comment-value-type (value-type) ()
   (:default-initargs
     :display-name "Comment"
@@ -559,6 +598,12 @@
                  :element-required nil
                  :element-nullable nil))
 
+(defparameter +subset-of-worklog+ 
+  (make-instance 'subset-value-type
+                 :container "worklogs"
+                 :element-type +worklog+
+                 :element-required nil
+                 :element-nullable nil))
 
 (defmethod parse-json-value* ((object cons) (type project-value-type) state session path)
   (if (not (eq (car object) :object))
@@ -650,6 +695,7 @@
 
 (defparameter *field-overrides*
   (attribute-tree
+    "worklog" +subset-of-worklog+ 
     "attachment" (make-array-value-type +json+)  ;; FIXME
     "comment" (make-subset-value-type +comment+ :container "comments")
     "components" +array-of-component+
@@ -818,7 +864,7 @@
 
 
 (defun find-issue (key-or-id &key (session *default-session*) 
-                                  (fields "*all,-comment,-attachment,-worklog")
+                                  (fields "*all")
                                   (expand nil) (if-does-not-exist :error)
                                   (default nil) (object-cache nil) 
                                   (include-json nil))

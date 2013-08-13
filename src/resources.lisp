@@ -185,6 +185,33 @@
      :reader comment-edited)))
 
 
+(defclass worklog (resource)
+  ((id
+     :type string :initarg :id
+     :reader worklog-id)
+   (comment
+     :type (or null string) :initform nil :initarg :body
+     :reader worklog-comment)
+   (started
+     :type (or null timestamp) :initform nil :initarg :started
+     :reader worklog-started)
+   (duration
+     :type (integer 0) :initform 0 :initarg :duration
+     :reader worklog-duration)
+   (author 
+     :type (or null user) :initform nil :initarg :author
+     :reader worklog-author)
+   (editor
+     :type (or null user) :initform nil :initarg :editor
+     :reader worklog-editor)
+   (created
+     :type (or null timestamp) :initform nil :initarg :created
+     :reader worklog-created)
+   (edited
+     :type (or null timestamp) :initform nil :initarg :edited
+     :reader worklog-edited)))
+
+
 (defclass issue-link-type (resource)
   ((id
      :type string :initarg :id
