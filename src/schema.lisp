@@ -26,18 +26,26 @@
 (defclass json-value-type (value-type) ()
   (:default-initargs
     :display-name "JSON Value"
-    :lisp-type 't))
+    :lisp-type 't
+    :documentation "Arbitrary JSON value. This type accepts any kind
+     of well-formed JSON object as its input. It should be used, if there
+     is no more appropriate type available in order to be able to at least
+     process the information received from the Jira instance."))
 
 (defclass string-value-type (value-type) ()
   (:default-initargs
     :identifier "string"
     :display-name "String"
-    :lisp-type 'string))
+    :lisp-type 'string
+    :documentation "Plain string value. This type accepts plain string
+     values of any length and contents."))
 
 (defclass integer-value-type (value-type) ()
   (:default-initargs
     :display-name "Integer"
-    :lisp-type 'integer))
+    :lisp-type 'integer
+    :documentation "Plain integer value. This type accepts any integer
+     number."))
 
 (defclass number-value-type (value-type) ()
   (:default-initargs
@@ -484,6 +492,44 @@
 
 
 
+(defclass attachment-value-type (value-type) ()
+  (:default-initargs
+    :display-name "Attachment"
+    :lisp-type 'attachment
+    :documentation "Type used to represent attachment objects associated 
+     with issues. Basically, an attachment is an external file attached
+     to an issue, with meta-data."))
+
+(defparameter +attachment+ (make-instance 'attachment-value-type))
+
+(defmethod parse-json-value* ((object cons) (type attachment-value-type) state session path)
+  (if (not (eq (car object) :object))
+      (call-next-method)
+      (let ((size 0) (mime-type "application/octet-stream") 
+            uri filename content-uri thumbnail-uri author created)
+        (loop
+           :for (key value) :on (cdr object) :by #'cddr
+           :for new-path := (cons key path)
+           :do (macrolet ((parse (type &rest options)
+                            `(parse-json-value value ,type :path new-path :state state :session session 
+                                               ,@options)))
+                 (string-case (key)
+                   ("self" (setf uri (parse +uri+ :required t)))
+                   ("filename" (setf filename (parse +string+ :required nil)))
+                   ("size" (setf size (parse +integer+ :required nil :default 0)))
+                   ("mimeType" (setf mime-type (parse +string+ :required nil :default "application/octet-stream")))
+                   ("content" (setf content-uri (parse +uri+ :required nil)))
+                   ("thumbnail" (setf thumbnail-uri (parse +uri+ :required nil)))
+                   ("author" (setf author (parse +user+ :required nil)))
+                   ("created" (setf created (parse +timestamp+ :required nil)))
+                   (t nil))))
+        (make-instance 'attachment
+                       'uri uri 'content-uri content-uri 'thumbnail-uri thumbnail-uri
+                       :size size :mime-type mime-type :filename filename
+                       :author author :created created))))
+
+
+
 
 (defclass worklog-value-type (value-type) ()
   (:default-initargs
@@ -605,6 +651,14 @@
                  :element-required nil
                  :element-nullable nil))
 
+(defparameter +array-of-attachment+
+  (make-instance 'array-value-type
+                 :lisp-type 'list
+                 :element-type +attachment+
+                 :element-required nil
+                 :element-nullable nil))
+              
+
 (defmethod parse-json-value* ((object cons) (type project-value-type) state session path)
   (if (not (eq (car object) :object))
       (call-next-method)
@@ -696,7 +750,7 @@
 (defparameter *field-overrides*
   (attribute-tree
     "worklog" +subset-of-worklog+ 
-    "attachment" (make-array-value-type +json+)  ;; FIXME
+    "attachment" +array-of-attachment+
     "comment" (make-subset-value-type +comment+ :container "comments")
     "components" +array-of-component+
     "project" +project+))

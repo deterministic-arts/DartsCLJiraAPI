@@ -30,7 +30,8 @@
   :description "API to access a JIRA instance via its REST API"
   :long-description ""
   :depends-on ("drakma" "darts.lib.trivia" "cl-base64" "puri" "trivial-utf-8"
-               "local-time" "darts.lib.hashtree" "cl-ppcre" "string-case")
+               "local-time" "darts.lib.hashtree" "cl-ppcre" "string-case"
+               "darts.lib.mime-types")
   :serial t
   :components ((:module "src"
                 :components ((:file "package")

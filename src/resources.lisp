@@ -212,6 +212,48 @@
      :reader worklog-edited)))
 
 
+(defclass attachment (resource)
+  ((filename
+     :type (or null string) :initform nil :initarg :filename
+     :reader attachment-filename)
+   (author 
+     :type (or null user) :initform nil :initarg :author
+     :reader attachment-author)
+   (created
+     :type (or null timestamp) :initform nil :initarg :created
+     :reader attachment-created)
+   (size
+     :type (integer 0) :initform 0 :initarg :size
+     :reader attachment-size)
+   (mime-type
+     :type mime-type :initarg mime-type 
+     :reader attachment-mime-type)
+   (content-uri
+     :type (or null uri) :initarg content-uri :initform nil
+     :reader attachment-content-uri)
+   (thumbnail-uri
+     :type (or null uri) :initarg thumbnail-uri :initform nil
+     :reader attachment-thumbnail-uri)))
+
+
+(defparameter +default-mime-type+ 
+  (parse-mime-type "application/octet-stream"))
+
+
+(defmethod initialize-instance :after ((object attachment) &key content-uri thumbnail-uri mime-type &allow-other-keys)
+  (unless (slot-boundp object 'mime-type)
+    (setf (slot-value object 'mime-type) 
+          (if mime-type
+              (parse-mime-type mime-type)
+              +default-mime-type+)))
+  (when (and (not (attachment-content-uri object)) content-uri)
+    (setf (slot-value object 'content-uri) (parse-uri content-uri)))
+  (when (and (not (attachment-thumbnail-uri object)) thumbnail-uri)
+    (setf (slot-value object 'thumbnail-uri) (parse-uri thumbnail-uri))))
+                                               
+ 
+
+
 (defclass issue-link-type (resource)
   ((id
      :type string :initarg :id
@@ -368,7 +410,7 @@
      :reader issue-link-outward-issue)))
 
 
-(defclass value-type () 
+(defclass value-type (annotatable) 
   ((identifier
      :type (or null string) :initform nil :initarg :identifier
      :reader value-type-identifier)
@@ -377,7 +419,10 @@
      :reader value-type-display-name)
    (lisp-type 
      :type t :initarg :lisp-type :initform 't
-     :reader value-type-lisp-type)))
+     :reader value-type-lisp-type)
+   (documentation 
+     :type (or null string) :initarg :documentation :initform nil
+     :reader value-type-documentation)))
 
 
 (defmethod print-object ((object value-type) stream)
@@ -457,7 +502,8 @@
 
 (define-reader-aliases resource-uri
   user-uri issue-uri priority-uri status-uri resolution-uri issue-type-uri
-  component-uri project-uri comment-uri issue-link-type-uri issue-link-uri)
+  component-uri project-uri comment-uri issue-link-type-uri issue-link-uri
+  attachment-uri worklog-uri)
 
 (define-reader-aliases descriptor-id 
   priority-id status-id resolution-id issue-type-id component-id)
