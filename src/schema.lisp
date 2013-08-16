@@ -185,6 +185,9 @@
 (defmacro registering (type-name (identifier &key (state 'state) (session 'session)) &body body)
   `(register-session-object ,state ,session ',type-name ,identifier 
                             (lambda () ,@body)))
+
+(defun uri->string (uri)
+  (with-output-to-string (stream) (render-uri uri stream)))
            
 
 ;;; Derived field types.
@@ -353,7 +356,8 @@
                                          :path (cons key path)
                                          :state state :session session)
                      (when (null fail)
-                       (push (make-instance 'avatar 'uri uri :width width :height height)
+                       (push (registering avatar ((uri->string uri))
+                               (make-instance 'avatar 'uri uri :width width :height height))
                              avatars))))))
          :finally (return avatars))))
 
@@ -523,10 +527,11 @@
                    ("author" (setf author (parse +user+ :required nil)))
                    ("created" (setf created (parse +timestamp+ :required nil)))
                    (t nil))))
-        (make-instance 'attachment
-                       'uri uri 'content-uri content-uri 'thumbnail-uri thumbnail-uri
-                       :size size :mime-type mime-type :filename filename
-                       :author author :created created))))
+        (registering attachment ((uri->string uri))
+          (make-instance 'attachment
+                         'uri uri 'content-uri content-uri 'thumbnail-uri thumbnail-uri
+                         :size size :mime-type mime-type :filename filename
+                         :author author :created created)))))
 
 
 
@@ -658,6 +663,13 @@
                  :element-required nil
                  :element-nullable nil))
               
+(defparameter +array-of-project+
+  (make-instance 'array-value-type
+                 :lisp-type 'list
+                 :element-type +project+
+                 :element-required nil
+                 :element-nullable nil))
+
 
 (defmethod parse-json-value* ((object cons) (type project-value-type) state session path)
   (if (not (eq (car object) :object))
@@ -727,11 +739,12 @@
                                           ("customId" (setf custom-id (parse value-2 +integer+ :required nil)))
                                           (t nil)))))
                    (t nil))))
-        (make-instance 'schema-field 
-                       :id id :name name :type type
-                       :orderable orderable :searchable searchable
-                       :navigable navigable :plugin plugin
-                       :custom-id custom-id))))
+        (registering schema-field (id)
+          (make-instance 'schema-field 
+                         :id id :name name :type type
+                         :orderable orderable :searchable searchable
+                         :navigable navigable :plugin plugin
+                         :custom-id custom-id)))))
 
 
 
@@ -1000,6 +1013,13 @@
             ((:default) (values default nil)))))))
 
 
+(defun list-projects (&key (session *default-session*) object-cache)
+  (with-json-result (body "project" :session session)
+    (parse-json-value body +array-of-project+ 
+                      :required nil :session session 
+                      :state object-cache)))
+
+
 (defun find-user (username
                   &key (session *default-session*) 
                        (if-does-not-exist :error) (default nil) 
@@ -1017,22 +1037,22 @@
 
 
 (defun list-issue-types (&key (session *default-session*) object-cache)
-  (with-json-result (body "issuetype")
+  (with-json-result (body "issuetype" :session session)
     (parse-json-value body +array-of-issue-type+ 
                       :required nil :session session :state object-cache)))
 
 (defun list-states (&key (session *default-session*) object-cache)
-  (with-json-result (body "status")
+  (with-json-result (body "status" :session session)
     (parse-json-value body +array-of-status+ 
                       :required nil :session session :state object-cache)))
 
 (defun list-priorities (&key (session *default-session*) object-cache)
-  (with-json-result (body "priority")
+  (with-json-result (body "priority" :session session)
     (parse-json-value body +array-of-priority+ 
                       :required nil :session session :state object-cache)))
 
 (defun list-resolutions (&key (session *default-session*) object-cache)
-  (with-json-result (body "resolution")
+  (with-json-result (body "resolution" :session session)
     (parse-json-value body +array-of-resolution+ 
                       :required nil :session session :state object-cache)))
 
