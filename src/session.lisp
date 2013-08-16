@@ -216,20 +216,17 @@
                                 &key (method :get) (content nil) (content-length nil)
                                      (parameters nil) (session *default-session*))
   (labels 
-      ((read-all (stream)
-         (let ((result (make-array 128 :element-type 'character :fill-pointer 0 :adjustable t))
-               (buffer (make-array 1024 :element-type 'character)))
+      ((collect-body (stream)
+         (let ((buffer (make-array 128 :element-type 'character :adjustable t :fill-pointer 0)))
+           (setf (flexi-streams:flexi-stream-external-format stream) '(:iso-8859-1))
            (loop
-              :for chars-read := (read-sequence buffer stream)
-              :while (plusp chars-read)
-              :do (loop
-                     :for k :upfrom 0 :below chars-read
-                     :do (vector-push-extend (char buffer k) result))
-              :finally (return result))))               
+              :for char := (read-char stream nil)
+              :while char :do (vector-push-extend char buffer)
+              :finally (return buffer))))
        (process-value (stream status)
-         (if (/= 200 status)
-             (transport-error session status (read-json-value stream))
-             (funcall function (read-json-value stream)))))
+         (if (<= 200 status 299)
+             (funcall function (read-json-value stream))
+             (transport-error session status (collect-body stream)))))
     (let ((full-uri (expand-resource-uri uri session))
           (auth-header (generate-auth-header session)))
       (multiple-value-bind (stream status)
@@ -241,6 +238,24 @@
         (unwind-protect (process-value stream status)
           (close stream))))))
   
+
+(defun oneway-request (uri &key (method :delete) (content nil) (content-length nil)
+                                (parameters nil) (session *default-session*))
+  (labels 
+      ((process-value (status)
+         (unless (<= 200 status 299)
+           (transport-error session status))))
+    (let ((full-uri (expand-resource-uri uri session))
+          (auth-header (generate-auth-header session)))
+      (multiple-value-bind (stream status)
+          (send-json-request session full-uri auth-header 
+                             :method method
+                             :content content 
+                             :content-length content-length
+                             :parameters parameters)
+        (unwind-protect (process-value status)
+          (close stream))))))
+
 
 (defmacro with-json-result ((var uri &rest options) &body body)
   `(invoke-with-json-result (lambda (,var) ,@body)

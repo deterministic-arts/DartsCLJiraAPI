@@ -496,6 +496,46 @@
 
 
 
+(defclass issue-filter-value-type (value-type) ()
+  (:default-initargs
+    :display-name "Issue Filter"
+    :lisp-type 'issue-filter
+    :documentation "Type used to represent a user's predefined issue
+     filters."))
+
+(defparameter +issue-filter+ (make-instance 'issue-filter-value-type))
+
+(defmethod parse-json-value* ((object cons) (type issue-filter-value-type) state session path)
+  (if (not (eq (car object) :object))
+      (call-next-method)
+      (let (uri id name description query owner favourite)
+        (loop
+           :for (key value) :on (cdr object) :by #'cddr
+           :for new-path := (cons key path)
+           :do (macrolet ((parse (type &rest options)
+                            `(parse-json-value value ,type :path new-path :state state :session session 
+                                               ,@options)))
+                 (string-case (key)
+                   ("self" (setf uri (parse +uri+ :required t)))
+                   ("id" (setf id (parse +string+ :required t)))
+                   ("name" (setf name (parse +string+ :required nil)))
+                   ("description" (setf description (parse +string+ :required nil)))
+                   ("jql" (setf query (parse +string+ :required nil)))
+                   ("owner" (setf owner (parse +user+ :required nil)))
+                   ("favourite" (setf favourite (parse +boolean+ :required nil)))
+                   (t nil))))
+        (registering issue-filter (id)
+          (make-instance 'issue-filter
+                         'uri uri :id id :name name :owner owner
+                         :description description :query query
+                         :favourite favourite)))))
+
+
+
+
+
+
+
 (defclass attachment-value-type (value-type) ()
   (:default-initargs
     :display-name "Attachment"
@@ -670,6 +710,20 @@
                  :element-required nil
                  :element-nullable nil))
 
+(defparameter +array-of-issue-filter+
+  (make-instance 'array-value-type
+                 :lisp-type 'list
+                 :element-type +issue-filter+
+                 :element-nullable nil
+                 :element-required nil))
+
+(defparameter +subset-of-comment+
+  (make-instance 'subset-value-type
+                 :container "comments"
+                 :element-type +comment+
+                 :element-nullable nil
+                 :element-required nil))
+
 
 (defmethod parse-json-value* ((object cons) (type project-value-type) state session path)
   (if (not (eq (car object) :object))
@@ -764,7 +818,7 @@
   (attribute-tree
     "worklog" +subset-of-worklog+ 
     "attachment" +array-of-attachment+
-    "comment" (make-subset-value-type +comment+ :container "comments")
+    "comment" +subset-of-comment+
     "components" +array-of-component+
     "project" +project+))
     
@@ -966,6 +1020,15 @@
                 ((:default) (values default nil (and include-json (transport-error-body condition)))))))))))
 
 
+(defgeneric query-command (object))
+(defmethod query-command ((object string)) object)
+
+(defmethod query-command ((object issue-filter)) 
+  (or (issue-filter-query object)
+      (error "~S has no associated query string" object)))
+
+
+
 (defun search-issues (query &key (session *default-session*) 
                                  (fields "*navigable,summary")
                                  (expand nil) (offset 0) (limit nil)
@@ -981,7 +1044,7 @@
   (flet ((param (include name value)
            (and include
                 (list (cons name (format nil "~A" value))))))
-    (let ((parameters (nconc (param t "jql" query)
+    (let ((parameters (nconc (param t "jql" (query-command query))
                              (param t "fields" fields)
                              (param expand "expand" expand)
                              (param (plusp offset) "startAt" offset)
@@ -1057,6 +1120,18 @@
                       :required nil :session session :state object-cache)))
 
 
+(defun list-issue-filters (&key (session *default-session*) object-cache)
+  (with-json-result (body "filter/favourite" :session session)
+    (parse-json-value body +array-of-issue-filter+
+                      :required nil :session session :state object-cache)))
+
+(defun find-issue-filter (id &key (session *default-session*) object-cache)
+  (with-json-result (body (format nil "filter/~A" id) :session session)
+    (parse-json-value body +issue-filter+
+                      :required nil :session session :state object-cache)))
+                      
+
+
 
 
 
@@ -1092,3 +1167,170 @@
         (make-instance 'mapped-field :definition base-field :key key)
         (make-instance 'mapped-field :definition base-field :key key :value-type value-type))))
                        
+
+(defgeneric issue-designator (object))
+(defmethod issue-designator ((object string)) object)
+(defmethod issue-designator ((object issue)) (issue-key object))
+
+(defgeneric comment-designator (object))
+(defmethod comment-designator ((object string)) object)
+(defmethod comment-designator ((object comment)) (comment-id object))
+
+(defgeneric worklog-designator (object))
+(defmethod worklog-designator ((object string)) object)
+(defmethod worklog-designator ((object worklog)) (worklog-id object))
+
+
+
+
+(defun add-comment (issue-key-or-id body &key (session *default-session*) object-cache)
+  (let ((request-bytes (string-to-utf-8-bytes (with-output-to-string (stream)
+                                                (rendering-json-object (put stream)
+                                                  (put "body" body :string))))))
+    (with-json-result (comment (format nil "issue/~A/comment" (issue-designator issue-key-or-id))
+                               :session session
+                               :method :post
+                               :content request-bytes
+                               :content-length (length request-bytes))
+      (parse-json-value comment +comment+
+                        :required nil :session session 
+                        :state object-cache))))
+
+(defun find-comment (issue comment 
+                     &key (session *default-session*) object-cache
+                          (if-does-not-exist :error) default)
+  (let ((uri (format nil "issue/~A/comment/~A" 
+                     (issue-designator issue)
+                     (comment-designator comment))))
+    (handler-case (with-json-result (body uri :session session)
+                    (values (parse-json-value body +comment+ 
+                                              :required t :session session :state object-cache
+                                              :path nil)
+                            t))
+      (transport-error (condition)
+        (if (eql (transport-error-status condition) 404)
+            (ecase if-does-not-exist
+              ((:error) (error condition))
+              ((:default) (values default nil))))))))
+
+
+(defun update-comment (issue comment body &key (session *default-session*) object-cache)
+  (let ((request-bytes (string-to-utf-8-bytes (with-output-to-string (stream)
+                                                (rendering-json-object (put stream)
+                                                  (put "body" body :string))))))
+    (with-json-result (comment (format nil "issue/~A/comment/~A" 
+                                       (issue-designator issue)
+                                       (comment-designator comment))
+                               :session session
+                               :method :put
+                               :content request-bytes
+                               :content-length (length request-bytes))
+      (parse-json-value comment +comment+
+                        :required nil :session session 
+                        :state object-cache))))
+
+
+(defun delete-comment (issue comment &key (session *default-session*))
+  (oneway-request (format nil "issue/~A/comment/~A" 
+                          (issue-designator issue)
+                          (comment-designator comment))
+                  :session session
+                  :method :delete))
+
+
+(defun list-comments (issue
+                      &key (session *default-session*) 
+                           object-cache)
+  (let ((uri (format nil "issue/~A/comment" (issue-designator issue))))
+      (with-json-result (body uri :session session)
+        (let ((subset (parse-json-value body +subset-of-comment+
+                                        :required t :session session
+                                        :state object-cache)))
+          ;; I love this: why do they bother to return a container with
+          ;; pagination information, if you cannot limit the result window
+          ;; anyway?
+          (values (subset-elements subset)
+                  (subset-total subset))))))
+
+
+
+(defun find-worklog (issue worklog
+                     &key (session *default-session*) object-cache
+                          (if-does-not-exist :error) default)
+  (let ((uri (format nil "issue/~A/worklog/~A" 
+                     (issue-designator issue)
+                     (worklog-designator worklog))))
+    (handler-case (with-json-result (body uri :session session)
+                    (values (parse-json-value body +worklog+
+                                              :required t :session session :state object-cache
+                                              :path nil)
+                            t))
+      (transport-error (condition)
+        (if (eql (transport-error-status condition) 404)
+            (ecase if-does-not-exist
+              ((:error) (error condition))
+              ((:default) (values default nil))))))))
+
+
+(defun list-worklogs (issue &key (session *default-session*) object-cache)
+  (let ((uri (format nil "issue/~A/worklog" (issue-designator issue))))
+      (with-json-result (body uri :session session)
+        (let ((subset (parse-json-value body +subset-of-worklog+
+                                        :required t :session session
+                                        :state object-cache)))
+          ;; I love this: why do they bother to return a container with
+          ;; pagination information, if you cannot limit the result window
+          ;; anyway?
+          (values (subset-elements subset)
+                  (subset-total subset))))))
+
+
+(defun render-timestamp (ts)
+  (format-timestring nil ts 
+                     :format '((:year 4) #\- (:month 2) #\- (:day 2) #\T (:hour 2) #\: (:min 2) ":00.000Z")
+                     :timezone +utc-zone+))
+
+(defun format-duration (seconds)
+  (check-type seconds (integer 1))
+  (multiple-value-bind (minutes seconds-remaining) (floor seconds 60)
+    (multiple-value-bind (hours minutes-remaining) (floor minutes 60)
+      (multiple-value-bind (days hours-remaining) (floor hours 24)
+        (let (fields)
+          (when (plusp days) (push (format nil "~Dd" days) fields))
+          (when (plusp hours-remaining) (push (format nil "~Dh" hours-remaining) fields))
+          (when (plusp minutes-remaining) (push (format nil "~Dm" hours-remaining) fields))
+          (when (plusp seconds-remaining) (push (format nil "~Ds" seconds-remaining) fields))
+          (format nil "~{~A~^ ~}" (nreverse fields)))))))
+
+
+(defun parse-estimate-adjustment (value)
+  (cond
+    ((null value) '(("adjustEstimate" . "auto")))
+    ((eq value :keep-value) '(("adjustEstimate" . "leave")))
+    ((eq value :automatic) '(("adjustEstimate" . "auto")))
+    ((not (listp value)) (error "malformed estimate adjustment ~S" value))
+    (t (destructuring-bind (what amount) value
+         (ecase what
+           ((:set-value) `(("adjustEstimate" . "new") ("newEstimate" . ,(format-duration amount))))
+           ((:reduce-value) `(("adjustEstimate" . "manual") ("reduceBy" . ,(format-duration amount)))))))))
+
+
+(defun add-worklog (issue start seconds 
+                    &key (adjust-estimate nil) (session *default-session*) object-cache comment)
+  (let ((request-bytes (string-to-utf-8-bytes (with-output-to-string (stream)
+                                                (rendering-json-object (put stream)
+                                                  (put "timeSpentSeconds" seconds :integer)
+                                                  (put "timeSpent" (format-duration seconds) :string)
+                                                  (put "started" (render-timestamp start) :string)
+                                                  (when comment (put "comment" comment :string))))))
+        (parameters (parse-estimate-adjustment adjust-estimate)))
+    (with-json-result (data (format nil "issue/~A/worklog" (issue-designator issue))
+                            :session session
+                            :parameters parameters
+                            :method :post
+                            :content request-bytes
+                            :content-length (length request-bytes))
+      (parse-json-value data +worklog+
+                        :required nil :session session 
+                        :state object-cache))))
+    

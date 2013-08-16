@@ -490,6 +490,28 @@
   (not (zerop (logand (schema-field-flags field) +custom-flag+))))
 
 
+(defclass issue-filter (resource)
+  ((id
+     :type string :initarg :id
+     :reader issue-filter-id)
+   (owner 
+     :type (or null user) :initform nil :initarg :owner
+     :reader issue-filter-owner)
+   (name
+     :type (or null string) :initform nil :initarg :name
+     :reader issue-filter-name)
+   (description
+     :type (or null string) :initform nil :initarg :description
+     :reader issue-filter-description)
+   (query
+     :type (or null string) :initform nil :initarg :query
+     :reader issue-filter-query)
+   (favourite
+     :type t :initform nil :initarg :favourite
+     :reader issue-filter-favourite-p)))
+
+   
+
 
 
 (defmacro define-reader-aliases (reader &body aliases)
@@ -503,7 +525,7 @@
 (define-reader-aliases resource-uri
   user-uri issue-uri priority-uri status-uri resolution-uri issue-type-uri
   component-uri project-uri comment-uri issue-link-type-uri issue-link-uri
-  attachment-uri worklog-uri)
+  attachment-uri worklog-uri issue-filter-uri)
 
 (define-reader-aliases descriptor-id 
   priority-id status-id resolution-id issue-type-id component-id)
