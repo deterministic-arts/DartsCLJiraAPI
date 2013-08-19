@@ -196,7 +196,8 @@
 (defun send-json-request (session full-uri auth-header 
                           &key (method :get) (content nil) (content-length nil)
                                (parameters nil))
-  (let ((*text-content-types* (cons (cons "application" "json") *text-content-types*)))
+  (let ((*text-content-types* (cons (cons "application" "json") *text-content-types*))
+        #-(and) (*header-stream* *standard-output*))
     (http-request full-uri
                   :method method
                   :parameters parameters

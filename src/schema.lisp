@@ -1287,7 +1287,7 @@
 
 (defun render-timestamp (ts)
   (format-timestring nil ts 
-                     :format '((:year 4) #\- (:month 2) #\- (:day 2) #\T (:hour 2) #\: (:min 2) ":00.000Z")
+                     :format '((:year 4) #\- (:month 2) #\- (:day 2) #\T (:hour 2) #\: (:min 2) ":00.000+0000")
                      :timezone +utc-zone+))
 
 (defun format-duration (seconds)
@@ -1322,7 +1322,7 @@
                                                   (put "timeSpentSeconds" seconds :integer)
                                                   (put "timeSpent" (format-duration seconds) :string)
                                                   (put "started" (render-timestamp start) :string)
-                                                  (when comment (put "comment" comment :string))))))
+                                                  (when comment (put "comment" comment :string)))))) 
         (parameters (parse-estimate-adjustment adjust-estimate)))
     (with-json-result (data (format nil "issue/~A/worklog" (issue-designator issue))
                             :session session
