@@ -485,14 +485,45 @@
                    ("self" (setf uri (parse +uri+ :required t)))
                    ("id" (setf id (parse +string+ :required t)))
                    ("name" (setf name (parse +string+ :required nil)))
-                   ("inwards" (setf inwards (parse +string+ :required nil)))
-                   ("outwards" (setf outwards (parse +string+ :required nil)))
+                   ("inward" (setf inwards (parse +string+ :required nil)))
+                   ("outward" (setf outwards (parse +string+ :required nil)))
                    (t nil))))
         (registering issue-link-type (id) 
           (make-instance 'issue-link-type
                          'uri uri :id id :name name
                          :inwards inwards
                          :outwards outwards)))))
+
+
+(defclass issue-link-value-type (value-type) ()
+  (:default-initargs
+    :display-name "Issue Link"
+    :lisp-type 'issue-link))
+
+(defparameter +issue-link+ (make-instance 'issue-link-value-type))
+
+(defmethod parse-json-value* ((object cons) (type issue-link-value-type) state session path)
+  (if (not (eq (car object) :object))
+      (call-next-method)
+      (let (uri id type outward inward)
+        (loop
+           :for (key value) :on (cdr object) :by #'cddr
+           :for new-path := (cons key path)
+           :do (macrolet ((parse (type &rest options)
+                            `(parse-json-value value ,type :path new-path :state state :session session 
+                                               ,@options)))
+                 (string-case (key)
+                   ("self" (setf uri (parse +uri+ :required t)))
+                   ("id" (setf id (parse +string+ :required t)))
+                   ("type" (setf type (parse +issue-link-type+ :required t)))
+                   ("inwardIssue" (setf inward (parse +issue+ :required nil)))
+                   ("outwardIssue" (setf outward (parse +issue+ :required nil)))
+                   (t nil))))
+        (registering issue-link (id) 
+          (make-instance 'issue-link
+                         'uri uri :id id :type type
+                         :inward-issue inward
+                         :outward-issue outward)))))
 
 
 
@@ -724,6 +755,13 @@
                  :element-nullable nil
                  :element-required nil))
 
+(defparameter +array-of-issue-link+
+  (make-instance 'array-value-type
+                 :lisp-type 'list
+                 :element-type +issue-link+
+                 :element-nullable nil
+                 :element-required nil))
+
 
 (defmethod parse-json-value* ((object cons) (type project-value-type) state session path)
   (if (not (eq (car object) :object))
@@ -820,6 +858,7 @@
     "attachment" +array-of-attachment+
     "comment" +subset-of-comment+
     "components" +array-of-component+
+    "issuelinks" +array-of-issue-link+
     "project" +project+))
     
 
